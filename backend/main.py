@@ -59,47 +59,33 @@ def home():
 
 
 
+
 @app.post("/api/query")
 def process_query(req: QueryRequest, db: Session = Depends(get_db)):
-    
-    # ---------------------------------------------------------
-    # 1. THIS IS WHERE YOU WOULD RUN GEOPANDAS / RAG
-    # For now, we simulate that we found 4 schools and 2 hospitals.
-    # ---------------------------------------------------------
-    fake_gis_result = {
-        "schools_found": ["St. Mary's School", "Govt LP School", "Sacred Heart", "St. George HS"],
-        "hospitals_used": ["Taluk Hospital", "Amala Medical Centre"],
-        "count": 4
-    }
-
-    # ---------------------------------------------------------
-    # 2. ASK THE LLM TO EXPLAIN THE RESULT IN PLAIN LANGUAGE
-    # ---------------------------------------------------------
-    prompt = f"""
-    You are a helpful GIS assistant for Thodupuzha Municipality.
-    The user asked: "{req.query}"
-    The GIS system found: {fake_gis_result}
-    
-    Write a friendly, conversational response explaining the results in 2-3 sentences. 
-    Do not use markdown. Just plain text.
-    """
-
     try:
-        ai_response = client.chat.completions.create(
-            model="gpt-4o-mini", # Or your model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        explanation = ai_response.choices[0].message.content
-    except Exception as e:
-        explanation = f"I found {fake_gis_result['count']} schools, but I couldn't connect to the AI language model to write an explanation."
+        query_text = req.query.strip()
 
-    # 3. Save to Database
-    new_query = QueryHistory(query_text=req.query, status="Completed")
-    db.add(new_query)
-    db.commit()
+        if not query_text:
+            raise HTTPException(
+                status_code=400,
+                detail="Please enter a GIS query.",
+            )
+
+        # Use the existing GIS query engine.
+        result = run_spatial_query(query_text)
+
+        # Save the query in the database.
+        new_query = QueryHistory(
+            query_text=query_text,
+            status="Completed",
+        )
+        db.add(new_query)
+        db.commit()
 
         return result
+
+    except HTTPException:
+        raise
 
     except Exception as exc:
         db.rollback()
