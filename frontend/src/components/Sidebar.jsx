@@ -13,18 +13,38 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="w-64 bg-[#0f3d2e] text-white flex flex-col h-screen fixed left-0 top-0">
-      <div className="p-6 border-b border-green-800">
-        <h1 className="text-xl font-bold flex items-center gap-2">🌍 GeoAsk</h1>
-        <p className="text-sm text-green-200 mt-1">Thodupuzha</p>
+    <aside className="w-64 bg-[#0f3d2e] text-white flex flex-col h-screen fixed left-0 top-0 shadow-lg z-50">
+      <div className="p-6 border-b border-green-800 flex items-center gap-3">
+        <div className="bg-green-500 p-2 rounded-lg text-xl">🌍</div>
+        <div>
+          <h1 className="text-xl font-bold leading-tight">GeoAsk</h1>
+          <p className="text-xs text-green-300">Thodupuzha</p>
+        </div>
       </div>
-      <nav className="flex-1 py-4">
+      
+      <nav className="flex-1 py-4 space-y-1">
         {navs.map((n) => (
-          <NavLink key={n.name} to={n.path} className={({isActive}) => `flex items-center gap-3 px-6 py-3 text-sm transition-colors ${isActive ? 'bg-[#185c46] border-l-4 border-green-400' : 'hover:bg-[#144d3a]'}`}>
+          <NavLink 
+            key={n.name} 
+            to={n.path} 
+            className={({isActive}) => 
+              `flex items-center gap-3 px-6 py-3 text-sm font-medium transition-all ${
+                isActive 
+                  ? 'bg-[#185c46] border-l-4 border-green-400 text-white' 
+                  : 'text-green-100 hover:bg-[#144d3a] hover:text-white'
+              }`
+            }
+          >
             {n.icon} {n.name}
           </NavLink>
         ))}
       </nav>
+
+      {/* Clean bottom branding instead of the fake map box */}
+      <div className="p-6 border-t border-green-800 text-xs text-green-400">
+        <p>RAG-LLM Spatial Interface</p>
+        <p className="mt-1">Govt. Engineering College Idukki</p>
+      </div>
     </aside>
   );
 }

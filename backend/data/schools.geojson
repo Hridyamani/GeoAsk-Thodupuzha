@@ -1,0 +1,12 @@
+{
+"type": "FeatureCollection",
+"name": "schools",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "name": "St. Mary's School" }, "geometry": { "type": "Point", "coordinates": [ 76.718, 9.897 ] } },
+{ "type": "Feature", "properties": { "name": "Govt LP School" }, "geometry": { "type": "Point", "coordinates": [ 76.72, 9.9 ] } },
+{ "type": "Feature", "properties": { "name": "Sacred Heart" }, "geometry": { "type": "Point", "coordinates": [ 76.712, 9.892 ] } },
+{ "type": "Feature", "properties": { "name": "St. George HS" }, "geometry": { "type": "Point", "coordinates": [ 76.73, 9.91 ] } },
+{ "type": "Feature", "properties": { "name": "Far Away School" }, "geometry": { "type": "Point", "coordinates": [ 76.8, 9.95 ] } }
+]
+}
