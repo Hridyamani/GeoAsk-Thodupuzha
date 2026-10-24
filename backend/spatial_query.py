@@ -7,7 +7,7 @@ import pandas as pd
 from gis_data import LAYER_FILES, load_layer
 
 
-# Map natural-language terms to your actual GIS layer names.
+# Map natural-language terms to actual GIS layer names.
 LAYER_KEYWORDS = {
     "education": [
         "school", "schools", "college", "colleges",
@@ -17,7 +17,9 @@ LAYER_KEYWORDS = {
         "hospital", "hospitals", "healthcare",
         "health care", "clinic", "clinics",
     ],
-    "pharmacies": ["pharmacy", "pharmacies", "medical store"],
+    "pharmacies": [
+        "pharmacy", "pharmacies", "medical store",
+    ],
     "food_services": [
         "restaurant", "restaurants", "food", "hotel",
         "hotels", "food service",
@@ -37,6 +39,7 @@ LAYER_KEYWORDS = {
     ],
 }
 
+
 LAYER_COLORS = {
     "education": "#2563eb",
     "healthcare": "#dc2626",
@@ -53,23 +56,26 @@ LAYER_COLORS = {
 
 
 def identify_layer(query: str):
-    """Identify a GIS layer mentioned in the question."""
+    """Identify the first GIS layer mentioned in a query."""
     text = query.lower()
     matches = []
 
     for layer_name, keywords in LAYER_KEYWORDS.items():
         for keyword in keywords:
             pattern = r"(?<!\w)" + re.escape(keyword) + r"(?!\w)"
-            if re.search(pattern, text):
-                matches.append((len(keyword), layer_name))
-                break
+
+            for match in re.finditer(pattern, text):
+                matches.append((
+                    match.start(),
+                    -len(keyword),
+                    layer_name,
+                ))
 
     if not matches:
         return None
 
-    # Prefer the most specific matching phrase.
-    matches.sort(reverse=True)
-    return matches[0][1]
+    matches.sort()
+    return matches[0][2]
 
 
 def clean_value(value):
@@ -97,7 +103,7 @@ def clean_value(value):
 
 
 def to_feature_collection(gdf):
-    """Convert results to a GeoJSON FeatureCollection."""
+    """Convert a GeoDataFrame to a GeoJSON FeatureCollection."""
     result = gdf.copy()
 
     if result.crs is not None and result.crs.to_epsg() != 4326:
@@ -116,11 +122,9 @@ def to_feature_collection(gdf):
             if column != result.geometry.name
         }
 
-        geometry = row.geometry.__geo_interface__
-
         features.append({
             "type": "Feature",
-            "geometry": geometry,
+            "geometry": row.geometry.__geo_interface__,
             "properties": properties,
         })
 
@@ -130,21 +134,65 @@ def to_feature_collection(gdf):
     }
 
 
+def make_buffer_feature(search_area, projected_crs, distance_m, source_layer):
+    """Convert a projected buffer into a Leaflet-compatible GeoJSON Feature."""
+    buffer_geometry = gpd.GeoSeries(
+        [search_area],
+        crs=projected_crs,
+    ).to_crs(epsg=4326).iloc[0]
+
+    return {
+        "type": "Feature",
+        "geometry": buffer_geometry.__geo_interface__,
+        "properties": {
+            "distance_m": float(distance_m),
+            "source_layer": source_layer,
+        },
+    }
+
+
 def run_spatial_query(query: str):
     """
     Execute supported natural-language GIS queries.
 
-    Supported:
-    - Show/list/find a layer.
-    - Find one layer within a distance of another layer.
-    - Find one layer near another layer.
+    Supports:
+    - Showing or listing a layer.
+    - Finding a layer within a specified distance of another layer.
+    - Finding the nearest features when no distance is specified.
     """
     query = query.strip()
     text = query.lower()
 
-    target_layer = identify_layer(query)
+    if not query:
+        return {
+            "status": "error",
+            "explanation": "Please enter a GIS query.",
+            "operations": [],
+            "map_data": {
+                "center": [9.895, 76.715],
+                "buffers": [],
+                "markers": [],
+                "geojson": None,
+            },
+        }
 
-    if target_layer is None:
+    # Find all layer mentions in their order in the user's query.
+    layer_mentions = []
+
+    for layer_name, keywords in LAYER_KEYWORDS.items():
+        for keyword in keywords:
+            pattern = r"(?<!\w)" + re.escape(keyword) + r"(?!\w)"
+
+            for match in re.finditer(pattern, text):
+                layer_mentions.append((
+                    match.start(),
+                    -len(keyword),
+                    layer_name,
+                ))
+
+    layer_mentions.sort()
+
+    if not layer_mentions:
         return {
             "status": "error",
             "explanation": (
@@ -162,9 +210,45 @@ def run_spatial_query(query: str):
             },
         }
 
-    # Load the requested target layer.
+    target_layer = layer_mentions[0][2]
+
+    # Detect proximity wording.
+    is_proximity = bool(
+        re.search(r"\b(near|nearby|within|close to)\b", text)
+    )
+
+    # Detect explicit distance, including metres, meters, m, and km.
+    distance_match = re.search(
+        r"\b(\d+(?:\.\d+)?)\s*"
+        r"(kilometers?|kilometres?|km|meters?|metres?|m)\b",
+        text,
+    )
+
+    distance_m = None
+
+    if distance_match:
+        distance = float(distance_match.group(1))
+        unit = distance_match.group(2)
+
+        if unit in ("km", "kilometer", "kilometers", "kilometre", "kilometres"):
+            distance_m = distance * 1000
+        else:
+            distance_m = distance
+
+    # Identify the reference layer from the remaining mentions.
+    second_layer = None
+
+    if is_proximity:
+        for _, _, mentioned_layer in layer_mentions[1:]:
+            if mentioned_layer != target_layer:
+                second_layer = mentioned_layer
+                break
+
     try:
         target = load_layer(target_layer)
+        target = target[
+            target.geometry.notna() & ~target.geometry.is_empty
+        ].copy()
     except Exception as exc:
         return {
             "status": "error",
@@ -178,64 +262,19 @@ def run_spatial_query(query: str):
             },
         }
 
-    target = target[
-        target.geometry.notna() & ~target.geometry.is_empty
-    ].copy()
-
-    # Check whether this is a proximity query.
-    is_proximity = bool(
-        re.search(r"\b(near|nearby|within|close to)\b", text)
-    )
-
-    distance_match = re.search(
-        r"\b(\d+(?:\.\d+)?)\s*(km|kilometers?|m|meters?)\b",
-        text,
-    )
-
-    distance_m = None
-    if distance_match:
-        distance = float(distance_match.group(1))
-        unit = distance_match.group(2)
-
-        distance_m = distance * (
-            1000 if unit.startswith("k") else 1
-        )
-
-    # Identify a second layer for spatial comparison.
-    second_layer = None
-    if is_proximity:
-        remaining_text = re.sub(
-            r"\b(\d+(?:\.\d+)?)\s*(km|kilometers?|m|meters?)\b",
-            " ",
-            text,
-        )
-
-        for layer_name, keywords in LAYER_KEYWORDS.items():
-            if layer_name == target_layer:
-                continue
-
-            if any(
-                re.search(
-                    r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
-                    remaining_text,
-                )
-                for keyword in keywords
-            ):
-                second_layer = layer_name
-                break
-
     operations = []
     buffers = []
 
     if is_proximity and second_layer:
         try:
             reference = load_layer(second_layer)
+            reference = reference[
+                reference.geometry.notna() & ~reference.geometry.is_empty
+            ].copy()
         except Exception as exc:
             return {
                 "status": "error",
-                "explanation": (
-                    f"Could not load {second_layer}: {exc}"
-                ),
+                "explanation": f"Could not load {second_layer}: {exc}",
                 "operations": [],
                 "map_data": {
                     "center": [9.895, 76.715],
@@ -245,94 +284,118 @@ def run_spatial_query(query: str):
                 },
             }
 
-        target = target[
-            target.geometry.notna() & ~target.geometry.is_empty
-        ].copy()
-        reference = reference[
-            reference.geometry.notna()
-            & ~reference.geometry.is_empty
-        ].copy()
-
         if target.empty or reference.empty:
             result = target.iloc[0:0].copy()
+            operation_name = (
+                "distance_filter"
+                if distance_m is not None
+                else "nearest_features"
+            )
         else:
-            # Project both layers into metres for correct distance
-            # calculations, then return results in EPSG:4326.
+            # Work in a projected CRS so distances and buffers use metres.
+            source_crs = target.crs or reference.crs or "EPSG:4326"
+
+            if target.crs is None:
+                target = target.set_crs(source_crs)
+
+            if reference.crs is None:
+                reference = reference.set_crs(source_crs)
+
             combined = gpd.GeoDataFrame(
                 geometry=gpd.GeoSeries(
                     list(target.geometry) + list(reference.geometry),
-                    crs=target.crs or "EPSG:4326",
+                    crs=source_crs,
                 ),
-                crs=target.crs or "EPSG:4326",
+                crs=source_crs,
             )
 
             projected_crs = combined.estimate_utm_crs()
 
             if projected_crs is None:
                 raise ValueError(
-                    "Could not determine a projected CRS for "
-                    "distance calculations."
+                    "Could not determine a projected CRS for distance calculations."
                 )
 
             target_projected = target.to_crs(projected_crs)
             reference_projected = reference.to_crs(projected_crs)
 
             if distance_m is not None:
-                reference_geometries = reference_projected.geometry
-                search_area = reference_geometries.buffer(distance_m).union_all()
-                mask = target_projected.geometry.intersects(search_area)
+                # Find target features intersecting the reference buffer.
+                search_area = (
+                    reference_projected.geometry
+                    .buffer(distance_m)
+                    .union_all()
+                )
 
+                mask = target_projected.geometry.intersects(search_area)
                 result = target_projected.loc[mask].copy()
 
-                buffers = [{
-                    "type": "Feature",
-                    "geometry": search_area.__geo_interface__,
-                    "properties": {
-                        "distance_m": distance_m,
-                        "source_layer": second_layer,
-                    },
-                }]
+                buffers.append(
+                    make_buffer_feature(
+                        search_area,
+                        projected_crs,
+                        distance_m,
+                        second_layer,
+                    )
+                )
+
                 operation_name = "distance_filter"
+
             else:
-                # "Near" without an explicit distance means nearest
-                # feature distance is measured against the reference
-                # layer; it does not impose an arbitrary cutoff.
+                # No explicit distance: return nearest target feature(s).
                 reference_union = reference_projected.geometry.union_all()
+
                 distances = target_projected.geometry.distance(
                     reference_union
                 )
+
                 nearest_distance = distances.min()
 
                 result = target_projected.loc[
                     distances <= nearest_distance + 0.001
                 ].copy()
+
                 operation_name = "nearest_features"
 
             result = result.to_crs(epsg=4326)
 
         operations.append({
-            "type": operation_name if not target.empty else "distance_filter",
+            "type": operation_name,
             "target_layer": target_layer,
             "reference_layer": second_layer,
             "distance_m": distance_m,
             "result_count": len(result),
         })
 
-        explanation = (
-            f"Found {len(result)} {target_layer.replace('_', ' ')} "
-            f"features in the requested spatial search relative to "
-            f"{second_layer.replace('_', ' ')}."
-        )
+        if distance_m is not None:
+            explanation = (
+                f"Found {len(result)} {target_layer.replace('_', ' ')} "
+                f"features within {distance_m:g} metres of "
+                f"{second_layer.replace('_', ' ')}."
+            )
+        else:
+            explanation = (
+                f"Found {len(result)} nearest "
+                f"{target_layer.replace('_', ' ')} features relative to "
+                f"{second_layer.replace('_', ' ')}."
+            )
 
-    elif is_proximity and distance_m is not None:
-        # A distance was specified, but no reference layer was found.
+    elif is_proximity:
+        if distance_m is not None:
+            explanation = (
+                "A distance was detected, but I could not identify the "
+                "reference layer. Try 'Find schools within 500 metres "
+                "of hospitals'."
+            )
+        else:
+            explanation = (
+                "I could not identify the reference layer for this "
+                "proximity query. Mention two supported layers."
+            )
+
         return {
             "status": "error",
-            "explanation": (
-                "I detected a distance but could not identify the "
-                "reference layer. Try, for example, "
-                "'Find schools within 500 metres of hospitals'."
-            ),
+            "explanation": explanation,
             "operations": [],
             "map_data": {
                 "center": [9.895, 76.715],
@@ -344,17 +407,17 @@ def run_spatial_query(query: str):
 
     else:
         result = target
+
         operations.append({
             "type": "layer_filter",
             "target_layer": target_layer,
             "result_count": len(result),
         })
+
         explanation = (
             f"Retrieved {len(result)} features from the "
             f"{target_layer.replace('_', ' ')} layer."
         )
-
-    geojson = to_feature_collection(result)
 
     return {
         "status": "success",
@@ -364,7 +427,7 @@ def run_spatial_query(query: str):
             "center": [9.895, 76.715],
             "buffers": buffers,
             "markers": [],
-            "geojson": geojson,
+            "geojson": to_feature_collection(result),
             "layer": target_layer,
             "color": LAYER_COLORS.get(target_layer, "#2563eb"),
         },
@@ -372,13 +435,10 @@ def run_spatial_query(query: str):
 
 
 def run_planned_query(plan: dict):
-    """
-    Execute a validated Qwen3 query plan using the existing GIS
-    loading and GeoJSON utilities.
-    """
+    """Execute a validated query plan using the existing GIS query engine."""
     target_layer = plan["target_layer"]
-    reference_layer = plan["reference_layer"]
-    distance_m = plan["distance_m"]
+    reference_layer = plan.get("reference_layer")
+    distance_m = plan.get("distance_m")
     operation = plan["operation"]
 
     if operation == "unsupported":
@@ -394,29 +454,32 @@ def run_planned_query(plan: dict):
             },
         }
 
-    # Build a query understood by the existing executor.
     if operation == "list_features":
         query_text = f"show all {target_layer.replace('_', ' ')}"
+
     elif operation == "within_distance":
+        if not reference_layer or distance_m is None:
+            raise ValueError(
+                "Reference layer and distance are required."
+            )
+
         query_text = (
             f"find {target_layer.replace('_', ' ')} "
             f"within {distance_m} metres of "
             f"{reference_layer.replace('_', ' ')}"
         )
+
     else:
         raise ValueError(f"Unsupported planned operation: {operation}")
 
-    # The existing keyword executor remains responsible for GIS
-    # loading, distance calculations, buffers, and GeoJSON.
     return run_spatial_query(query_text)
 
 
 def execute_query_plan(plan: dict):
-    """Execute a validated Qwen3 plan without re-identifying layers."""
-
+    """Execute a validated query plan without relying on user wording."""
     target_layer = plan["target_layer"]
-    reference_layer = plan["reference_layer"]
-    distance_m = plan["distance_m"]
+    reference_layer = plan.get("reference_layer")
+    distance_m = plan.get("distance_m")
     operation = plan["operation"]
 
     empty_map = {
@@ -444,7 +507,9 @@ def execute_query_plan(plan: dict):
 
         if operation == "within_distance":
             if not reference_layer or distance_m is None:
-                raise ValueError("Reference layer and distance are required.")
+                raise ValueError(
+                    "Reference layer and distance are required."
+                )
 
             reference = load_layer(reference_layer)
             reference = reference[
@@ -454,16 +519,23 @@ def execute_query_plan(plan: dict):
             if target.empty or reference.empty:
                 result = target.iloc[0:0].copy()
             else:
-                source_crs = target.crs or "EPSG:4326"
-                target = target.set_crs(source_crs, allow_override=True) if target.crs is None else target
-                reference = reference.set_crs(source_crs, allow_override=True) if reference.crs is None else reference
+                source_crs = target.crs or reference.crs or "EPSG:4326"
 
-                target_projected = target.to_crs(
-                    target.estimate_utm_crs()
-                )
-                reference_projected = reference.to_crs(
-                    target_projected.crs
-                )
+                if target.crs is None:
+                    target = target.set_crs(source_crs)
+
+                if reference.crs is None:
+                    reference = reference.set_crs(source_crs)
+
+                projected_crs = target.estimate_utm_crs()
+
+                if projected_crs is None:
+                    raise ValueError(
+                        "Could not determine a projected CRS."
+                    )
+
+                target_projected = target.to_crs(projected_crs)
+                reference_projected = reference.to_crs(projected_crs)
 
                 search_area = (
                     reference_projected.geometry
@@ -475,14 +547,14 @@ def execute_query_plan(plan: dict):
                 result = target_projected.loc[mask].copy()
                 result = result.to_crs(epsg=4326)
 
-                buffers = [{
-                    "type": "Feature",
-                    "geometry": search_area.__geo_interface__,
-                    "properties": {
-                        "distance_m": float(distance_m),
-                        "source_layer": reference_layer,
-                    },
-                }]
+                buffers.append(
+                    make_buffer_feature(
+                        search_area,
+                        projected_crs,
+                        float(distance_m),
+                        reference_layer,
+                    )
+                )
 
             operation_type = "distance_filter"
             explanation = (
@@ -494,6 +566,7 @@ def execute_query_plan(plan: dict):
         elif operation == "list_features":
             result = target
             operation_type = "layer_filter"
+
             explanation = (
                 f"Retrieved {len(result)} features from the "
                 f"{target_layer.replace('_', ' ')} layer."
@@ -529,4 +602,3 @@ def execute_query_plan(plan: dict):
             "operations": [],
             "map_data": empty_map,
         }
-

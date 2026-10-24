@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
+from gis_data import LAYER_FILES, load_layer
 from shapely.geometry import mapping
 from sqlalchemy.orm import Session
 from query_planner import plan_query
@@ -182,17 +183,8 @@ def get_gis_layer(layer_name: str):
             "properties": safe_properties,
         })
 
+    
     return {
-        "status": "success",
-        "explanation": explanation, # The LLM text!
-        "operations": ["Hospitals layer", "Schools layer", "2 km buffer", "Intersect"],
-        "map_data": {
-            "center": [9.895, 76.715],
-            "buffers": [{"center": [9.895, 76.715], "radius": 2000}],
-            "markers": [
-                {"pos": [9.895, 76.715], "type": "hospital"},
-                {"pos": [9.897, 76.718], "type": "school"},
-                {"pos": [9.900, 76.720], "type": "school"}
-            ]
-        }
+        "type": "FeatureCollection",
+        "features": features,
     }
