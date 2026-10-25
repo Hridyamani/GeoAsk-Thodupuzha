@@ -16,68 +16,24 @@ export default function Query() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-
-    const trimmedQuery = query.trim();
-
-    if (!trimmedQuery) return;
-
-    localStorage.setItem('currentQuery', trimmedQuery);
-    localStorage.removeItem('queryResult');
-
-    navigate('/processing');
+    if (query.trim()) {
+      // Save query to local storage to pass to processing/result pages
+      localStorage.setItem('currentQuery', query);
+      navigate('/processing');
+    }
   };
 
   return (
-    <div className="mx-auto max-w-3xl rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
-      <h2 className="mb-2 text-2xl font-bold text-gray-900">
-        Enter Your Spatial Query
-      </h2>
-
-      <p className="mb-6 text-sm text-gray-500">
-        Ask a question about the available GIS data in Thodupuzha.
-      </p>
-
+    <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl border border-gray-200 shadow-sm">
+      <h2 className="text-2xl font-bold mb-6">Enter Your Spatial Query</h2>
       <form onSubmit={handleSubmit}>
-        <label
-          htmlFor="spatial-query"
-          className="mb-2 block text-sm font-medium text-gray-700"
-        >
-          Your question
-        </label>
-
-        <textarea
-          id="spatial-query"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="e.g., Find schools within 500 metres of hospitals"
-          rows={3}
-          className="mb-4 w-full resize-y rounded-lg border border-gray-300 p-4 outline-none focus:ring-2 focus:ring-green-500"
-          required
-        />
-
-        <button
-          type="submit"
-          disabled={!query.trim()}
-          className="mb-8 rounded-lg bg-[#0f3d2e] px-8 py-3 font-medium text-white hover:bg-[#185c46] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Submit Query
-        </button>
+        <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="e.g., Show schools within 2 km of hospitals." className="w-full border border-gray-300 rounded-lg p-4 mb-6 focus:ring-2 focus:ring-green-500 outline-none" />
+        <button type="submit" className="bg-[#0f3d2e] text-white px-8 py-3 rounded-lg font-medium hover:bg-[#185c46] mb-8">Submit Query</button>
       </form>
-
       <div>
-        <h4 className="mb-3 text-sm font-semibold text-gray-700">
-          Example Queries
-        </h4>
-
-        {exampleQueries.map((example) => (
-          <button
-            key={example}
-            type="button"
-            onClick={() => setQuery(example)}
-            className="mb-2 block w-full rounded-lg border border-gray-200 bg-gray-50 p-3 text-left text-sm text-gray-600 hover:bg-gray-100"
-          >
-            {example}
-          </button>
+        <h4 className="text-sm font-medium text-gray-700 mb-3">Example Queries</h4>
+        {['Show schools within 2 km of hospitals.', 'Find buildings inside the flood zone.', 'List villages intersecting the river.'].map((ex, i) => (
+          <button key={i} onClick={() => setQuery(ex)} className="block w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded border border-gray-200 text-sm text-gray-600 mb-2">{ex}</button>
         ))}
       </div>
 

@@ -20,6 +20,7 @@ from spatial_query import run_spatial_query, execute_query_plan
 
 from database import SessionLocal, QueryHistory
 from openai import OpenAI
+from gis_engine import run_spatial_workflow # Import our new GIS engine!
 import os
 from dotenv import load_dotenv
 
@@ -63,128 +64,41 @@ def home():
 
 @app.post("/api/query")
 def process_query(req: QueryRequest, db: Session = Depends(get_db)):
-    try:
-        query_text = req.query.strip()
-
-        if not query_text:
-            raise HTTPException(
-                status_code=400,
-                detail="Please enter a GIS query.",
-            )
-
-        # Use the existing GIS query engine.
-        result = run_spatial_query(query_text)
-
-        # Save the query in the database.
-        new_query = QueryHistory(
-            query_text=query_text,
-            status="Completed",
-        )
-        db.add(new_query)
-        db.commit()
-
-        return result
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"GIS query processing failed: {exc}",
-        )
-
-@app.get("/api/layers")
-def list_gis_layers():
-    """List available GIS layers and their feature counts."""
-    result = []
-
-    for name in LAYER_FILES:
-        try:
-            gdf = load_layer(name)
-            result.append({
-                "name": name,
-                "feature_count": len(gdf),
-                "geometry_types": sorted(
-                    gdf.geom_type.dropna().unique().tolist()
-                ),
-            })
-        except Exception as exc:
-            result.append({
-                "name": name,
-                "error": str(exc),
-            })
-
-    return {"layers": result}
-
-
-@app.get("/api/layers/{layer_name}")
-def get_gis_layer(layer_name: str):
-    """Return a GIS layer as GeoJSON for Leaflet."""
-
-    try:
-        gdf = load_layer(layer_name)
-    except (ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not load layer: {exc}",
-        )
-
-    gdf = gdf[
-        gdf.geometry.notna() & ~gdf.geometry.is_empty
-    ]
-
-    features = []
-
-    for _, row in gdf.iterrows():
-        properties = row.drop(
-            labels=[gdf.geometry.name]
-        ).to_dict()
-
-        clean_properties = {}
-
-        for key, value in properties.items():
-            if value is None:
-                clean_properties[key] = None
-                continue
-
-            # Convert NumPy scalar values to native Python values.
-            if hasattr(value, "item"):
-                value = value.item()
-
-            # Convert missing values to JSON null.
-            try:
-                missing = pd.isna(value)
-                if isinstance(missing, bool) and missing:
-                    clean_properties[key] = None
-                    continue
-            except (TypeError, ValueError):
-                pass
-
-            if isinstance(value, float) and not math.isfinite(value):
-                clean_properties[key] = None
-            else:
-                clean_properties[key] = value
-
-        safe_properties = json.loads(
-            json.dumps(
-                jsonable_encoder(clean_properties),
-                allow_nan=False,
-                default=str,
-            )
-        )
-
-        features.append({
-            "type": "Feature",
-            "geometry": mapping(row.geometry),
-            "properties": safe_properties,
-        })
-
     
+    # 1. RUN THE REAL GIS OPERATIONS
+    gis_result = run_spatial_workflow(req.query)
+    
+    # 2. ASK THE LLM TO EXPLAIN THE REAL RESULTS
+    prompt = f"""
+    You are a helpful GIS assistant for Thodupuzha Municipality.
+    The user asked: "{req.query}"
+    
+    The GIS system actually ran a 2km buffer around hospitals and intersected it with schools.
+    The system found {gis_result['count']} schools inside the buffer: {', '.join(gis_result['found_schools'])}.
+    
+    Write a friendly, conversational response explaining these specific results in 2-3 sentences. 
+    Do not use markdown. Just plain text. If 0 schools were found, tell them none were found in that area.
+    """
+
+    try:
+        ai_response = client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        explanation = ai_response.choices[0].message.content
+    except Exception as e:
+        explanation = f"I successfully ran the GIS operation and found {gis_result['count']} schools, but I couldn't connect to the AI model to write a summary."
+
+    # 3. Save to Database
+    new_query = QueryHistory(query_text=req.query, status="Completed")
+    db.add(new_query)
+    db.commit()
+
+    # 4. Return to React
     return {
-        "type": "FeatureCollection",
-        "features": features,
+        "status": "success",
+        "explanation": explanation,
+        "operations": ["Load Schools Layer", "Load Hospitals Layer", "Buffer Hospitals by 2km", "Intersect with Schools"],
+        "map_data": gis_result["map_data"] # Real map data generated by GeoPandas
     }
