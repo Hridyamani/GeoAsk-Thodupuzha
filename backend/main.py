@@ -1,95 +1,251 @@
-from fastapi import FastAPI, Depends
+
+import json
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from database import SessionLocal, QueryHistory
-from openai import OpenAI
-from gis_engine import run_spatial_workflow
-import os
-from dotenv import load_dotenv
+from gis_data import LAYER_FILES, load_layer
+from query_planner import plan_query
+from qwen_service import check_qwen_connection
+from spatial_query import execute_query_plan
 
-load_dotenv()
 
-app = FastAPI()
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+app = FastAPI(
+    title="GeoAsk-Thodupuzha API",
+    description="Natural-language GIS query and visualization API",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --------------------------------------------------
+# Database dependency
+# --------------------------------------------------
 
 def get_db():
     db = SessionLocal()
+
     try:
         yield db
     finally:
         db.close()
 
+
+# --------------------------------------------------
+# Request model
+# --------------------------------------------------
+
 class QueryRequest(BaseModel):
     query: str
 
-@app.post("/api/query")
-def process_query(req: QueryRequest, db: Session = Depends(get_db)):
-    
-    # 1. RUN THE REAL GIS OPERATIONS
-    gis_result = run_spatial_workflow(req.query)
-    
-    # 2. ASK THE LLM TO EXPLAIN THE RESULTS
-    school_list = ", ".join(gis_result['found_schools']) if gis_result['found_schools'] else "None"
-    
-    prompt = f"""
-    You are a helpful GIS assistant for Thodupuzha Municipality.
-    The user asked: "{req.query}"
-    
-    The GIS system ran a {gis_result['distance_used']} meter buffer around hospitals and intersected it with schools.
-    The system found {gis_result['count']} schools inside the buffer. 
-    The names of the schools are: {school_list}.
-    
-    Write a friendly, conversational response explaining these specific results in 2-3 sentences. 
-    If schools were found, list their names. If 0 schools were found, tell them none were found in that area.
-    Do not use markdown. Just plain text.
-    """
 
-    try:
-        ai_response = client.chat.completions.create(
-            model="gpt-4o-mini", 
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        explanation = ai_response.choices[0].message.content
-    except Exception as e:
-        explanation = f"I successfully ran the GIS operation and found {gis_result['count']} schools within {gis_result['distance_used']} meters, but I couldn't connect to the AI model to write a summary."
+# --------------------------------------------------
+# General endpoints
+# --------------------------------------------------
 
-    # 3. Save to Database (This makes the History page work!)
-    new_query = QueryHistory(query_text=req.query, status="Completed")
-    db.add(new_query)
-    db.commit()
-
-    # 4. Return to React
+@app.get("/")
+def home():
     return {
-        "status": "success",
-        "explanation": explanation,
-        "operations": [
-            "Load Schools Layer", 
-            "Load Hospitals Layer", 
-            f"Buffer Hospitals by {gis_result['distance_used']}m", 
-            "Intersect with Schools"
-        ],
-        "map_data": gis_result["map_data"]
+        "message": "GeoAsk-Thodupuzha API is running"
     }
 
-# THIS IS THE MISSING PIECE FOR YOUR HISTORY PAGE:
+
+@app.get("/api/ai/health")
+def qwen_health():
+    try:
+        return check_qwen_connection()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not check Qwen connection: {exc}",
+        )
+
+
+# --------------------------------------------------
+# GIS layer endpoints
+# --------------------------------------------------
+
+@app.get("/api/layers")
+def get_layers():
+    """
+    Return available GIS layers with feature counts.
+
+    Each successful layer contains:
+    - name
+    - feature_count
+
+    Failed layers contain an error field.
+    """
+
+    layers = []
+
+    for layer_name in LAYER_FILES.keys():
+        try:
+            gdf = load_layer(layer_name)
+
+            # Count features in the loaded layer.
+            layers.append({
+                "name": layer_name,
+                "feature_count": len(gdf),
+            })
+
+        except Exception as exc:
+            layers.append({
+                "name": layer_name,
+                "feature_count": 0,
+                "error": str(exc),
+            })
+
+    return {
+        "layers": layers
+    }
+
+
+@app.get("/api/layers/{layer_name}")
+def get_layer_data(layer_name: str):
+    """Return one GIS layer as GeoJSON in WGS84 coordinates."""
+
+    if layer_name not in LAYER_FILES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown GIS layer: {layer_name}",
+        )
+
+    try:
+        gdf = load_layer(layer_name)
+
+        # Leaflet expects geographic coordinates.
+        if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(epsg=4326)
+
+        # Remove missing and empty geometries.
+        gdf = gdf[
+            gdf.geometry.notna()
+            & ~gdf.geometry.is_empty
+        ].copy()
+
+        geojson = json.loads(gdf.to_json())
+
+        return jsonable_encoder(geojson)
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not load GIS layer '{layer_name}': {exc}",
+        )
+
+
+# --------------------------------------------------
+# Query history endpoint
+# --------------------------------------------------
+
 @app.get("/api/history")
-def get_history(db: Session = Depends(get_db)):
-    records = db.query(QueryHistory).order_by(QueryHistory.id.desc()).all()
-    return [
-        {
-            "id": r.id, 
-            "query": r.query_text, 
-            "status": r.status, 
-            "date": r.date_time.strftime("%b %d, %Y %H:%M") 
-        } for r in records
-    ]
+def get_query_history(
+    db: Session = Depends(get_db),
+):
+    """Return the 50 most recent GIS queries."""
+
+    try:
+        records = (
+            db.query(QueryHistory)
+            .order_by(QueryHistory.id.desc())
+            .limit(50)
+            .all()
+        )
+
+        return [
+            {
+                "id": record.id,
+                "query_text": record.query_text,
+                "status": record.status,
+            }
+            for record in records
+        ]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not retrieve query history: {exc}",
+        )
+
+
+# --------------------------------------------------
+# Natural-language GIS query endpoint
+# --------------------------------------------------
+
+@app.post("/api/query")
+def process_query(
+    req: QueryRequest,
+    db: Session = Depends(get_db),
+):
+    """Plan and execute a natural-language GIS query."""
+
+    query = req.query.strip()
+
+    if not query:
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a GIS query.",
+        )
+
+    try:
+        # Interpret the user's natural-language query.
+        plan = plan_query(query)
+
+        # Execute the query using the existing GIS query engine.
+        result = execute_query_plan(plan)
+
+        # Save the query execution status.
+        history_status = (
+            "Completed"
+            if isinstance(result, dict)
+            and result.get("status") == "success"
+            else "Failed"
+        )
+
+        history = QueryHistory(
+            query_text=query,
+            status=history_status,
+        )
+
+        db.add(history)
+        db.commit()
+
+        return jsonable_encoder(result)
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not process GIS query: {exc}",
+        )
