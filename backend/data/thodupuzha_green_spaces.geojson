@@ -1,0 +1,15 @@
+{
+"type": "FeatureCollection",
+"name": "thodupuzha_green_spaces",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "id": "way/645855294", "@id": "way/645855294", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": null, "leisure": "park", "name": "Vimala Kids Playground", "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7240226, 9.8969861 ] } },
+{ "type": "Feature", "properties": { "id": "way/799105543", "@id": "way/799105543", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": null, "leisure": "park", "name": "childrens park", "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7125645, 9.8977451 ] } },
+{ "type": "Feature", "properties": { "id": "node/6897376397", "@id": "node/6897376397", "addr:city": "Thodupuzha", "addr:postcode": "685582", "addr:street": "Gandhi Square", "landuse": null, "leisure": "park", "name": "Muncipal park", "@geometry": null, "opening_hours": "Mo-Su 10:00-22:00" }, "geometry": { "type": "Point", "coordinates": [ 76.7123491, 9.8983281 ] } },
+{ "type": "Feature", "properties": { "id": "way/383732195", "@id": "way/383732195", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": "grass", "leisure": null, "name": null, "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7254151, 9.9025045 ] } },
+{ "type": "Feature", "properties": { "id": "way/383732196", "@id": "way/383732196", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": "grass", "leisure": null, "name": null, "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7256858, 9.9025913 ] } },
+{ "type": "Feature", "properties": { "id": "way/799105542", "@id": "way/799105542", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": null, "leisure": "park", "name": "municipal park", "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7122744, 9.8983643 ] } },
+{ "type": "Feature", "properties": { "id": "way/1019342886", "@id": "way/1019342886", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": "grass", "leisure": null, "name": null, "@geometry": "center", "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7106993, 9.9048715 ] } },
+{ "type": "Feature", "properties": { "id": "node/8411938232", "@id": "node/8411938232", "addr:city": null, "addr:postcode": null, "addr:street": null, "landuse": null, "leisure": "park", "name": null, "@geometry": null, "opening_hours": null }, "geometry": { "type": "Point", "coordinates": [ 76.7020581, 9.9080972 ] } }
+]
+}
