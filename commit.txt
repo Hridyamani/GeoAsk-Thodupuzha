@@ -1,0 +1,12 @@
+backend: 
+
+cd "C:\Users\User\Documents\B TECH\S7\MAIN PROJECT 1\GeoAsk-Thodupuzha\backend"
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
+
+
+frontend:
+
+cd "C:\Users\User\Documents\B TECH\S7\MAIN PROJECT 1\GeoAsk-Thodupuzha\frontend"
+npm install
+npm run dev
